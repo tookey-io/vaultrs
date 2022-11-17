@@ -113,6 +113,31 @@ impl VaultClient {
             http_client = http_client.add_root_certificate(cert);
         }
 
+        // Add TLS Client certificates (reqwest Identity)
+        if !settings.tls_client_cert.is_empty() {
+            let pem = {
+                let mut cert = std::fs::read(&settings.tls_client_cert).map_err(|e| ClientError::FileReadError {
+                    source: e,
+                    path: settings.tls_client_cert.clone(),
+                })?;
+                let mut key = std::fs::read(&settings.tls_client_key).map_err(|e| ClientError::FileReadError {
+                    source: e,
+                    path: settings.tls_client_key.clone(),
+                })?;
+                cert.append(&mut key);
+                cert
+            };
+            let identity = reqwest::Identity::from_pem(&pem).map_err(|e| {
+                ClientError::ParseCertificateError {
+                    source: e,
+                    path: settings.tls_client_cert.clone(),
+                }
+            })?;
+
+            info!("Using Client certificate from {} and {}", settings.tls_client_cert, settings.tls_client_key);
+            http_client = http_client.identity(identity);
+        }
+
         // Configures middleware for endpoints to append API version and token
         debug!("Using API version {}", settings.version);
         let version_str = format!("v{}", settings.version);
@@ -154,6 +179,10 @@ pub struct VaultClientSettings {
     pub address: Url,
     #[builder(default = "self.default_ca_certs()")]
     pub ca_certs: Vec<String>,
+    #[builder(default = "self.default_tls_client_cert()")]
+    pub tls_client_cert: String,
+    #[builder(default = "self.default_tls_client_key()")]
+    pub tls_client_key: String,
     #[builder(default)]
     pub timeout: Option<Duration>,
     #[builder(setter(into), default = "self.default_token()")]
@@ -247,6 +276,26 @@ impl VaultClientSettingsBuilder {
         }
 
         paths
+    }
+
+    fn default_tls_client_cert(&self) -> String {
+        match env::var("VAULT_TLS_CLIENT_CERT") {
+            Ok(s) => {
+                info!("Found Client TLS certificate in $VAULT_TLS_CLIENT_CERT");
+                s
+            }
+            Err(..) => String::from("")
+        }
+    }
+
+    fn default_tls_client_key(&self) -> String {
+        match env::var("VAULT_TLS_CLIENT_KEY") {
+            Ok(s) => {
+                info!("Found TLS Client key in $VAULT_TLS_CLIENT_KEY");
+                s
+            }
+            Err(..) => String::from("")
+        }
     }
 
     fn validate(&self) -> Result<(), String> {
