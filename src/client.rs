@@ -114,18 +114,28 @@ impl VaultClient {
         }
 
         // Add TLS Client certificates (reqwest Identity)
-        if !settings.tls_client_cert.is_empty() {
-            let pem = {
-                let mut cert = std::fs::read(&settings.tls_client_cert).map_err(|e| ClientError::FileReadError {
-                    source: e,
-                    path: settings.tls_client_cert.clone(),
-                })?;
-                let mut key = std::fs::read(&settings.tls_client_key).map_err(|e| ClientError::FileReadError {
-                    source: e,
-                    path: settings.tls_client_key.clone(),
-                })?;
-                cert.append(&mut key);
-                cert
+        if !settings.tls_client_cert.is_empty() || !settings.tls_client_pem.is_empty() {
+            let pem = match settings.tls_client_pem.is_empty() {
+                true => {
+                    info!("Using Client certificate from {} and {}", settings.tls_client_cert, settings.tls_client_key);
+                    let mut cert = fs::read(&settings.tls_client_cert).map_err(|e| ClientError::FileReadError {
+                        source: e,
+                        path: settings.tls_client_cert.clone(),
+                    })?;
+                    let mut key = fs::read(&settings.tls_client_key).map_err(|e| ClientError::FileReadError {
+                        source: e,
+                        path: settings.tls_client_key.clone(),
+                    })?;
+                    cert.append(&mut key);
+                    cert
+                },
+                false => {
+                    info!("Using Client PEM from {}", settings.tls_client_pem);
+                    fs::read(&settings.tls_client_pem).map_err(|e| ClientError::FileReadError {
+                        source: e,
+                        path: settings.tls_client_pem.clone(),
+                    })?
+                }
             };
             let identity = reqwest::Identity::from_pem(&pem).map_err(|e| {
                 ClientError::ParseCertificateError {
@@ -134,7 +144,6 @@ impl VaultClient {
                 }
             })?;
 
-            info!("Using Client certificate from {} and {}", settings.tls_client_cert, settings.tls_client_key);
             http_client = http_client.identity(identity);
         }
 
@@ -183,6 +192,8 @@ pub struct VaultClientSettings {
     pub tls_client_cert: String,
     #[builder(default = "self.default_tls_client_key()")]
     pub tls_client_key: String,
+    #[builder(default = "self.default_tls_client_pem()")]
+    pub tls_client_pem: String,
     #[builder(default)]
     pub timeout: Option<Duration>,
     #[builder(setter(into), default = "self.default_token()")]
@@ -292,6 +303,16 @@ impl VaultClientSettingsBuilder {
         match env::var("VAULT_TLS_CLIENT_KEY") {
             Ok(s) => {
                 info!("Found TLS Client key in $VAULT_TLS_CLIENT_KEY");
+                s
+            }
+            Err(..) => String::from("")
+        }
+    }
+
+    fn default_tls_client_pem(&self) -> String {
+        match env::var("VAULT_TLS_CLIENT_PEM") {
+            Ok(s) => {
+                info!("Found TLS Client PEM in $VAULT_TLS_CLIENT_PEM");
                 s
             }
             Err(..) => String::from("")
